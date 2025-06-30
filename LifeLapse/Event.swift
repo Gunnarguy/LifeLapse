@@ -25,6 +25,8 @@ final class Event: Identifiable {
     var favorite: Bool = false
     var assetLocalID: String? = nil
     var significance: Double = 0.0
+    var details: String? = nil
+    var colorHex: String? = nil
 
     init(id: UUID = UUID(),
          date: Date = Date.now,
@@ -35,7 +37,9 @@ final class Event: Identifiable {
          userWeight: Double = 0.0,
          engagement: Int = 0,
          favorite: Bool = false,
-         assetLocalID: String? = nil) {
+         assetLocalID: String? = nil,
+         details: String? = nil,
+         colorHex: String? = nil) {
         self.id = id
         self.date = date
         self.type = type
@@ -48,6 +52,8 @@ final class Event: Identifiable {
         self.favorite = favorite
         self.assetLocalID = assetLocalID
         self.significance = 0.0     // filled post‑save
+        self.details = details
+        self.colorHex = colorHex
     }
 
     var coordinate: CLLocationCoordinate2D? {

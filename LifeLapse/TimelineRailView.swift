@@ -83,10 +83,13 @@ struct TimelineRailView: View {
                         let events = DataHelpers.fetchAllEvents(from: context)
                         guard let earliest = events.first?.date,
                               let latest = events.last?.date else { return }
-                        
-                        let pct = max(0, min(1, value.location.x / geo.size.width))
-                        let interval = latest.timeIntervalSince(earliest)
-                        vm.playhead = earliest.addingTimeInterval(Double(pct) * interval)
+
+                        let totalDuration = latest.timeIntervalSince(earliest)
+                        if totalDuration > 0 {
+                            let percentage = max(0, min(1, value.location.x / geo.size.width))
+                            let newTimeInterval = earliest.timeIntervalSince1970 + (totalDuration * percentage)
+                            vm.setPlayhead(to: Date(timeIntervalSince1970: newTimeInterval))
+                        }
                     }
             )
         }

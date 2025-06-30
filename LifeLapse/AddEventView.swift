@@ -23,6 +23,8 @@ struct AddEventView: View {
     @State private var favorite = false
     @State private var userWeight = 0.0
     @State private var engagement = 0
+    @State private var details = ""
+    @State private var color = Color.blue
     
     // Location picking
     @State private var showingLocationPicker = false
@@ -53,6 +55,12 @@ struct AddEventView: View {
                     .pickerStyle(.menu)
                     
                     DatePicker("Date", selection: $date, displayedComponents: [.date, .hourAndMinute])
+                    ColorPicker("Event Color", selection: $color)
+                }
+                
+                Section("Notes") {
+                    TextEditor(text: $details)
+                        .frame(height: 100)
                 }
                 
                 Section("Location") {
@@ -115,12 +123,14 @@ struct AddEventView: View {
         let event = Event(
             date: date,
             type: eventType,
-            title: title.trimmingCharacters(in: .whitespacesAndNewlines),
-            subtitle: subtitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : subtitle,
+            title: title,
+            subtitle: subtitle,
             coordinate: selectedLocation,
             userWeight: userWeight,
             engagement: engagement,
-            favorite: favorite
+            favorite: favorite,
+            details: details,
+            colorHex: color.toHex()
         )
         
         store.add(event)
@@ -226,5 +236,15 @@ struct LocationPickerView: View {
                 }
             }
         }
+    }
+}
+
+extension Color {
+    func toHex() -> String {
+        let components = self.cgColor?.components ?? [0, 0, 0, 1]
+        let r = Int(components[0] * 255.0)
+        let g = Int(components[1] * 255.0)
+        let b = Int(components[2] * 255.0)
+        return String(format: "#%02X%02X%02X", r, g, b)
     }
 }
