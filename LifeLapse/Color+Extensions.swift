@@ -1,4 +1,3 @@
-
 import SwiftUI
 
 // Helper to convert Color to Hex and back

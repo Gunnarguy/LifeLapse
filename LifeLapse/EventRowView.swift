@@ -2,6 +2,8 @@
 import SwiftUI
 
 struct EventRowView: View {
+    @Environment(EventStore.self) private var store
+    @State private var isEditing = false
     let event: Event
     
     var body: some View {
@@ -44,5 +46,12 @@ struct EventRowView: View {
             }
         }
         .padding(.vertical, 4)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            isEditing = true
+        }
+        .sheet(isPresented: $isEditing) {
+            EditEventView(store: store, event: event)
+        }
     }
 }

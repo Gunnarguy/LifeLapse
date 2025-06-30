@@ -11,29 +11,73 @@ struct ContentView: View {
     var body: some View {
         Group {
             if let store, let timeline {
-                TabView {
-                    // Main Timeline Tab - unified view
-                    TimelineView(timeline: timeline, store: store, showingAddEvent: $showingAddEvent)
-                        .tabItem {
-                            Label("Timeline", systemImage: "clock")
-                        }
+                ZStack {
+                    TabView {
+                        // Main Timeline Tab - unified view
+                        TimelineView(timeline: timeline, store: store, showingAddEvent: $showingAddEvent)
+                            .tabItem {
+                                Label("Timeline", systemImage: "clock")
+                            }
 
-                    // Events List Tab
-                    EventsListView(store: store, showingAddEvent: $showingAddEvent)
-                        .tabItem {
-                            Label("Events", systemImage: "list.bullet")
-                        }
+                        // Events List Tab
+                        EventsListView(store: store, showingAddEvent: $showingAddEvent)
+                            .tabItem {
+                                Label("Events", systemImage: "list.bullet")
+                            }
 
-                    // Settings Tab
-                    NavigationView {
-                        SettingsView(store: store)
+                        // Settings Tab
+                        NavigationView {
+                            SettingsView(store: store)
+                        }
+                        .tabItem {
+                            Label("Settings", systemImage: "gear")
+                        }
                     }
-                    .tabItem {
-                        Label("Settings", systemImage: "gear")
+                    .environment(store)
+                    .ignoresSafeArea(.all, edges: .top) // Full screen for iPhone
+                    .preferredColorScheme(.dark) // Better for map-based UI
+                    
+                    // Global import progress indicator (appears above tabs)
+                    if store.isImportingPhotos {
+                        VStack {
+                            Spacer()
+                            
+                            // Compact progress bar at bottom above tab bar
+                            VStack(spacing: 8) {
+                                HStack {
+                                    Image(systemName: "photo.stack.fill")
+                                        .foregroundColor(.blue)
+                                        .symbolEffect(.pulse, options: .repeating)
+                                    
+                                    Text("Importing \(store.currentImportedCount) of \(store.totalPhotosToImport) photos")
+                                        .font(.caption)
+                                        .foregroundColor(.primary)
+                                    
+                                    Spacer()
+                                    
+                                    Text("\(Int(store.photosImportProgress * 100))%")
+                                        .font(.caption)
+                                        .fontWeight(.medium)
+                                        .foregroundColor(.blue)
+                                        .contentTransition(.numericText())
+                                }
+                                
+                                ProgressView(value: store.photosImportProgress)
+                                    .progressViewStyle(LinearProgressViewStyle(tint: .blue))
+                                    .frame(height: 3)
+                                    .animation(.easeInOut(duration: 0.3), value: store.photosImportProgress)
+                            }
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 12)
+                            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+                            .shadow(color: .black.opacity(0.2), radius: 8, x: 0, y: -2)
+                            .padding(.horizontal, 16)
+                            .padding(.bottom, 100) // Above tab bar
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                            .animation(.easeInOut(duration: 0.4), value: store.isImportingPhotos)
+                        }
                     }
                 }
-                .ignoresSafeArea(.all, edges: .top) // Full screen for iPhone
-                .preferredColorScheme(.dark) // Better for map-based UI
             } else {
                 ProgressView("Loading...")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -78,6 +122,15 @@ struct TimelineView: View {
                     .ignoresSafeArea(.all)
                 
                 VStack {
+                    // Floating progress banner during photo import
+                    if store.isImportingPhotos {
+                        ImportProgressBanner(store: store)
+                            .padding(.horizontal, 16)
+                            .padding(.top, 8)
+                            .transition(.move(edge: .top).combined(with: .opacity))
+                            .animation(.easeInOut(duration: 0.3), value: store.isImportingPhotos)
+                    }
+                    
                     Spacer()
                     
                     // Timeline rail at bottom with controls
@@ -252,6 +305,91 @@ struct EventsListView: View {
         let sortedEvents = store.events.sorted { $0.date > $1.date }
         for index in offsets {
             store.delete(sortedEvents[index])
+        }
+    }
+}
+
+/// Floating banner showing photo import progress
+struct ImportProgressBanner: View {
+    let store: EventStore
+    @State private var isExpanded = false
+    
+    var body: some View {
+        VStack(spacing: 0) {
+            // Compact banner
+            HStack {
+                Image(systemName: "photo.stack.fill")
+                    .foregroundColor(.white)
+                    .font(.title3)
+                    .symbolEffect(.pulse, options: .repeating)
+                
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Importing Photos")
+                        .font(.headline)
+                        .foregroundColor(.white)
+                    
+                    Text("\(Int(store.photosImportProgress * 100))%")
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.9))
+                        .contentTransition(.numericText())
+                }
+                
+                Spacer()
+                
+                Text("\(Int(store.photosImportProgress * 100))%")
+                    .font(.title2)
+                    .fontWeight(.bold)
+                    .foregroundColor(.white)
+                    .contentTransition(.numericText())
+                
+                Button {
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        isExpanded.toggle()
+                    }
+                } label: {
+                    Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                        .foregroundColor(.white.opacity(0.8))
+                        .font(.caption)
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            
+            // Expanded details
+            if isExpanded {
+                VStack(spacing: 8) {
+                    ProgressView(value: store.photosImportProgress)
+                        .progressViewStyle(LinearProgressViewStyle(tint: .white))
+                        .scaleEffect(y: 1.5)
+                    
+                    if store.totalPhotosToImport > 0 {
+                        HStack {
+                            Text("\(store.currentImportedCount) of \(store.totalPhotosToImport) photos")
+                                .font(.caption)
+                                .foregroundColor(.white.opacity(0.9))
+                            
+                            Spacer()
+                            
+                            if !store.currentImportPhase.isEmpty {
+                                Text(store.currentImportPhase)
+                                    .font(.caption2)
+                                    .foregroundColor(.white.opacity(0.7))
+                                    .lineLimit(1)
+                            }
+                        }
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 12)
+                .transition(.opacity.combined(with: .scale(scale: 0.95, anchor: .top)))
+            }
+        }
+        .background(.blue.gradient, in: RoundedRectangle(cornerRadius: 12))
+        .shadow(color: .black.opacity(0.3), radius: 8, x: 0, y: 4)
+        .onTapGesture {
+            withAnimation(.easeInOut(duration: 0.3)) {
+                isExpanded.toggle()
+            }
         }
     }
 }

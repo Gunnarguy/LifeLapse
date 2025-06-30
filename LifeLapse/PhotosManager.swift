@@ -30,6 +30,11 @@ final class PhotosManager: NSObject {
     var isImporting: Bool = false
     var lastImportError: String?
     
+    // Detailed progress information
+    var currentImportedCount: Int = 0
+    var totalPhotosToImport: Int = 0
+    var currentPhase: String = ""
+    
     // Track last sync to avoid re-importing
     private var importedAssetIDs: Set<String> = []
     
@@ -58,6 +63,16 @@ final class PhotosManager: NSObject {
         isImporting = true
         importProgress = 0.0
         lastImportError = nil
+        currentImportedCount = 0
+        totalPhotosToImport = 0
+        currentPhase = "Initializing photo import..."
+        
+        print("📸 Starting photo import...")
+        
+        // Small delay to show initial UI state
+        try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
+        
+        currentPhase = "Analyzing photo library..."
         
         // Fetch all photos sorted by creation date
         let fetchOptions = PHFetchOptions()
@@ -67,15 +82,31 @@ final class PhotosManager: NSObject {
         // Only import photos that haven't been imported yet
         let allPhotos = PHAsset.fetchAssets(with: .image, options: fetchOptions)
         let totalCount = allPhotos.count
+        totalPhotosToImport = totalCount
+        currentImportedCount = 0
         
         print("📸 Found \(totalCount) photos total, checking for new ones...")
+        currentPhase = "Found \(totalCount) photos. Starting import..."
         
+        // Another small delay to show the count
+        try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
+        
+        currentPhase = "Processing photos..."
+        
+        // Process photos in batches with proper async handling
         var importedCount = 0
         var skippedCount = 0
         var batchEvents: [Event] = []
-        let batchSize = 50 // Process in batches to avoid memory issues
+        let batchSize = 15 // Smaller batches for more frequent UI updates
         
-        allPhotos.enumerateObjects { asset, index, _ in
+        for index in 0..<totalCount {
+            let asset = allPhotos.object(at: index)
+            
+            // Update current phase more frequently for better UX
+            if index % 50 == 0 {
+                currentPhase = "Processing photo \(index + 1) of \(totalCount)..."
+            }
+            
             // Skip if already imported
             if self.isAssetImported(asset.localIdentifier) {
                 skippedCount += 1
@@ -89,19 +120,29 @@ final class PhotosManager: NSObject {
             
             // Process batch when full or at end
             if batchEvents.count >= batchSize || index == totalCount - 1 {
-                // Add events to store on main thread
-                Task { @MainActor in
-                    for event in batchEvents {
-                        store.add(event)
-                    }
-                    importedCount += batchEvents.count
-                    self.importProgress = Double(index + 1) / Double(totalCount)
+                // Add events to store
+                for event in batchEvents {
+                    store.add(event)
+                }
+                importedCount += batchEvents.count
+                batchEvents.removeAll()
+                
+                // Update detailed progress information more frequently
+                self.currentImportedCount = importedCount
+                self.importProgress = Double(index + 1) / Double(totalCount)
+                self.currentPhase = "Imported \(importedCount) photos, skipped \(skippedCount)..."
+                
+                // Log progress more frequently for debugging
+                if index % 50 == 0 || index == totalCount - 1 {
                     print("📸 Processed \(index + 1)/\(totalCount) photos (\(importedCount) new, \(skippedCount) skipped)")
                 }
-                batchEvents.removeAll()
+                
+                // Smaller delay for more responsive UI updates
+                try? await Task.sleep(nanoseconds: 25_000_000) // 0.025 seconds
             }
         }
         
+        currentPhase = "Finalizing import..."
         isImporting = false
         importProgress = 1.0
         UserDefaults.standard.set(Date(), forKey: "PhotosLastSyncDate")

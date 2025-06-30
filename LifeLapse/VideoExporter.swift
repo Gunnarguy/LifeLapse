@@ -1,103 +1,110 @@
-//  Export/VideoExporter.swift
-import AVFoundation
-import SwiftUI
+@preconcurrency import AVFoundation
+import UIKit
 
-enum VideoExporter {
-    static func export(events: [Event]) -> AsyncStream<Double> {
-        AsyncStream { continuation in
-            Task.detached {
-                // Extract event dates and other properties on main actor first
-                let eventData = await MainActor.run {
-                    events.map { event in
-                        (date: event.date, significance: event.significance)
-                    }
-                }
-                
-                let fps: Double = 60
-                let duration: Double = 60
-                let frameCount = Int(duration * fps)
-                let renderer = UIGraphicsImageRenderer(size: CGSize(width: 1080, height: 1920))
+// VideoExporter is public to be accessible from other modules
+public final class VideoExporter {
+    // AVFoundation objects must be used on the main actor
+    // because they are not Sendable and are not safe for concurrency.
+    @MainActor private var assetWriter: AVAssetWriter?
+    @MainActor private var assetWriterInput: AVAssetWriterInput?
 
-                // Prepare AVWriter
-                let url = FileManager.default.temporaryDirectory.appendingPathComponent("timeline.mov")
-                try? FileManager.default.removeItem(at: url)
-                let writer = try! AVAssetWriter(url: url, fileType: .mov)
-                let settings: [String: Any] = [
-                    AVVideoCodecKey: AVVideoCodecType.h264,
-                    AVVideoWidthKey: 1080,
-                    AVVideoHeightKey: 1920
-                ]
-                let input = AVAssetWriterInput(mediaType: .video, outputSettings: settings)
-                let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: input,
-                                                                   sourcePixelBufferAttributes: nil)
-                writer.add(input)
-                writer.startWriting()
-                writer.startSession(atSourceTime: .zero)
+    public init() { }
 
-                let minDate = eventData.first?.date ?? Date.now
-                let maxDate = eventData.last?.date ?? Date.now
-
-                for frame in 0..<frameCount {
-                    let progress = Double(frame)/Double(frameCount)
-                    let time = CMTime(value: CMTimeValue(frame), timescale: CMTimeScale(fps))
-
-                    let virtualDate = minDate.addingTimeInterval(
-                        progress * maxDate.timeIntervalSince(minDate)
-                    )
-                    let currentEvents = eventData.filter { abs($0.date.timeIntervalSince(virtualDate)) < 86_400 }
-
-                    let img = await MainActor.run {
-                        renderer.image { ctx in
-                            UIColor.black.setFill(); ctx.fill(CGRect(origin: .zero, size: ctx.format.bounds.size))
-                            for ev in currentEvents {
-                                let x = CGFloat.random(in: 0...1080)
-                                let y = CGFloat.random(in: 0...1920)
-                                let radius = CGFloat(10 + 40*ev.significance)
-                                UIColor.white.withAlphaComponent(0.8).setFill()
-                                ctx.cgContext.fillEllipse(in: CGRect(x: x-radius, y: y-radius, width: 2*radius, height: 2*radius))
-                            }
-                        }
-                    }
-                    
-                    while !input.isReadyForMoreMediaData { usleep(1_000) }
-                    if let buf = await MainActor.run(body: { img.pixelBuffer() }) {
-                        adaptor.append(buf, withPresentationTime: time)
-                    }
-                    continuation.yield(progress)
-                }
-
-                input.markAsFinished()
-                writer.finishWriting {
-                    continuation.yield(1.0)
-                    continuation.finish()
-                    // Present share sheet etc.
-                }
+    @MainActor
+    public func export(images: [UIImage], to url: URL) async throws -> URL {
+        // Prepare all UIImage to CGImage on background thread
+        let cgImages = await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let mapped = images.compactMap { $0.cgImage }
+                continuation.resume(returning: mapped)
             }
+        }
+
+        // Initialize AVAssetWriter and input on the main actor
+        self.assetWriter = try AVAssetWriter(outputURL: url, fileType: .mov)
+        guard let assetWriter = self.assetWriter else {
+            throw NSError(domain: "VideoExporter", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to create AVAssetWriter"])
+        }
+
+        let settings: [String: Any] = [
+            AVVideoCodecKey: AVVideoCodecType.h264,
+            AVVideoWidthKey: cgImages.first?.width ?? 1920,
+            AVVideoHeightKey: cgImages.first?.height ?? 1080
+        ]
+        self.assetWriterInput = AVAssetWriterInput(mediaType: .video, outputSettings: settings)
+        guard let assetWriterInput = self.assetWriterInput else {
+            throw NSError(domain: "VideoExporter", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to create AVAssetWriterInput"])
+        }
+
+        assetWriter.add(assetWriterInput)
+        assetWriter.startWriting()
+        assetWriter.startSession(atSourceTime: .zero)
+
+        let frameDuration = CMTime(value: 1, timescale: 30)
+        var frameCount: Int64 = 0
+
+        let pixelBufferAdaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: assetWriterInput, sourcePixelBufferAttributes: nil)
+
+        for cgImage in cgImages {
+            while !assetWriterInput.isReadyForMoreMediaData {
+                // Sleep to wait until input is ready
+                try await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
+            }
+
+            guard let pixelBuffer = cgImage.pixelBuffer() else {
+                throw NSError(domain: "VideoExporter", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to create pixel buffer"])
+            }
+
+            let presentationTime = CMTimeMultiply(frameDuration, multiplier: Int32(frameCount))
+            pixelBufferAdaptor.append(pixelBuffer, withPresentationTime: presentationTime)
+            frameCount += 1
+        }
+
+        assetWriterInput.markAsFinished()
+        await assetWriter.finishWriting()
+
+        if assetWriter.status == .completed {
+            return url
+        } else {
+            throw assetWriter.error ?? NSError(domain: "VideoExporter", code: -1, userInfo: [NSLocalizedDescriptionKey: "Export failed"])
         }
     }
 }
 
-// UIImage → CVPixelBuffer helper
-extension UIImage {
+private extension CGImage {
     func pixelBuffer() -> CVPixelBuffer? {
-        let width = Int(size.width), height = Int(size.height)
-        var pxbuf: CVPixelBuffer?
-        let attrs = [kCVPixelBufferCGImageCompatibilityKey: true,
-                     kCVPixelBufferCGBitmapContextCompatibilityKey: true] as CFDictionary
-        guard CVPixelBufferCreate(kCFAllocatorDefault,
-                                  width, height,
-                                  kCVPixelFormatType_32BGRA,
-                                  attrs, &pxbuf) == kCVReturnSuccess,
-              let buf = pxbuf else { return nil }
+        let options = [
+            kCVPixelBufferCGImageCompatibilityKey: true,
+            kCVPixelBufferCGBitmapContextCompatibilityKey: true
+        ] as CFDictionary
 
-        CVPixelBufferLockBaseAddress(buf, [])
-        let ctx = CGContext(data: CVPixelBufferGetBaseAddress(buf),
-                            width: width, height: height,
-                            bitsPerComponent: 8, bytesPerRow: CVPixelBufferGetBytesPerRow(buf),
-                            space: CGColorSpaceCreateDeviceRGB(),
-                            bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue)
-        ctx?.draw(cgImage!, in: CGRect(x: 0, y: 0, width: width, height: height))
-        CVPixelBufferUnlockBaseAddress(buf, [])
-        return buf
+        var pxbuffer: CVPixelBuffer?
+        let width = self.width
+        let height = self.height
+
+        let status = CVPixelBufferCreate(kCFAllocatorDefault, width, height,
+                                         kCVPixelFormatType_32ARGB, options,
+                                         &pxbuffer)
+
+        guard status == kCVReturnSuccess, let pixelBuffer = pxbuffer else {
+            return nil
+        }
+
+        CVPixelBufferLockBaseAddress(pixelBuffer, [])
+        let pxdata = CVPixelBufferGetBaseAddress(pixelBuffer)
+
+        let rgbColorSpace = CGColorSpaceCreateDeviceRGB()
+        guard let context = CGContext(data: pxdata, width: width, height: height,
+                                      bitsPerComponent: 8, bytesPerRow: CVPixelBufferGetBytesPerRow(pixelBuffer),
+                                      space: rgbColorSpace,
+                                      bitmapInfo: CGImageAlphaInfo.noneSkipFirst.rawValue) else {
+            CVPixelBufferUnlockBaseAddress(pixelBuffer, [])
+            return nil
+        }
+
+        context.draw(self, in: CGRect(x: 0, y: 0, width: width, height: height))
+        CVPixelBufferUnlockBaseAddress(pixelBuffer, [])
+
+        return pixelBuffer
     }
 }

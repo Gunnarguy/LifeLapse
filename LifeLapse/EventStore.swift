@@ -7,34 +7,44 @@ import Photos
 
 @Observable
 final class EventStore {
-    private let context: ModelContext
+    private let modelContext: ModelContext
     private(set) var events: [Event] = []
     
     // Photos integration - make public for external access
     let photosManager = PhotosManager()
 
     init(context: ModelContext) {
-        self.context = context
+        self.modelContext = context
         refresh()
+    }
+    
+    /// Public access to the model context for external operations
+    var context: ModelContext {
+        return modelContext
     }
 
     func refresh() {
-        events = DataHelpers.fetchAllEvents(from: context)
+        events = DataHelpers.fetchAllEvents(from: modelContext)
     }
 
     // MARK: – CRUD
     func add(_ event: Event) {
-        context.insert(event)
+        modelContext.insert(event)
         save()
     }
 
     func delete(_ event: Event) {
-        context.delete(event)
+        modelContext.delete(event)
+        save()
+    }
+
+    func updateEvent(_ event: Event) {
+        // SwiftData tracks changes automatically, so we just need to save.
         save()
     }
 
     func save() {
-        if DataHelpers.saveContext(context) {
+        if DataHelpers.saveContext(modelContext) {
             refresh()
         }
     }
@@ -80,6 +90,21 @@ final class EventStore {
     /// Check if photos are currently being imported
     var isImportingPhotos: Bool {
         photosManager.isImporting
+    }
+    
+    /// Get current count of imported photos during import
+    var currentImportedCount: Int {
+        photosManager.currentImportedCount
+    }
+    
+    /// Get total count of photos to import
+    var totalPhotosToImport: Int {
+        photosManager.totalPhotosToImport
+    }
+    
+    /// Get current import phase description
+    var currentImportPhase: String {
+        photosManager.currentPhase
     }
     
     /// Get last photos import error if any
